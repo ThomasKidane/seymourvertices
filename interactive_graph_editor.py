@@ -49,12 +49,19 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
     G.add_nodes_from(graph_data.get('nodes', []))
     seymour_vertices = get_seymour_vertices(G)
     
-    # Prepare nodes data
+    # Prepare nodes data with saved positions
+    node_positions = graph_data.get('node_positions', {})
     for i, node in enumerate(graph_data.get('nodes', [])):
+        # Use saved position if available, otherwise use default grid position
+        if node in node_positions:
+            x, y = node_positions[node]['x'], node_positions[node]['y']
+        else:
+            x, y = 50 + (i % 5) * 150, 50 + (i // 5) * 120
+            
         nodes.append({
             'id': node,
-            'x': 50 + (i % 5) * 150,  # Arrange in grid initially
-            'y': 50 + (i // 5) * 120,
+            'x': x,
+            'y': y,
             'is_seymour': node in seymour_vertices
         })
     
@@ -505,6 +512,33 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
                 window.dispatchEvent(event);
             }}
             
+            function saveNodePositions() {{
+                // Save current node positions to localStorage for persistence
+                const positions = {{}};
+                graphData.nodes.forEach(node => {{
+                    positions[node.id] = {{ x: node.x, y: node.y }};
+                }});
+                localStorage.setItem('nodePositions', JSON.stringify(positions));
+                console.log('Saved node positions:', positions);
+            }}
+            
+            function loadNodePositions() {{
+                // Load node positions from localStorage
+                const saved = localStorage.getItem('nodePositions');
+                if (saved) {{
+                    const positions = JSON.parse(saved);
+                    console.log('Loading saved positions:', positions);
+                    
+                    graphData.nodes.forEach(node => {{
+                        if (positions[node.id]) {{
+                            node.x = positions[node.id].x;
+                            node.y = positions[node.id].y;
+                        }}
+                    }});
+                    render();
+                }}
+            }}
+            
             let lastMouseX = 0;
             let lastMouseY = 0;
             let dragStartX = 0;
@@ -626,9 +660,10 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
                 const targetNode = getNodeAt(pos.x, pos.y);
                 
                 if (isDragging && startDragNode && moveMode) {{
-                    // Move mode - just update position and send data
+                    // Move mode - just update position and save
+                    saveNodePositions(); // Save positions to localStorage
                     sendDataToStreamlit();
-                    updateStatus(`Node ${{startDragNode.id}} moved to new position`);
+                    updateStatus(`Node ${{startDragNode.id}} moved to new position - saved!`);
                 }} else if (isDragging && startDragNode && !moveMode && targetNode && targetNode !== startDragNode) {{
                     // Connect mode - check for existing edge in the desired direction
                     const existingEdge = graphData.edges.find(
@@ -741,7 +776,8 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
             console.log('Canvas:', canvas, 'Context:', ctx);
             console.log('Canvas dimensions:', canvas.width, 'x', canvas.height);
             
-            // Initial render
+            // Load saved positions and render
+            loadNodePositions();
             updateSeymourStatus();
             render();
             
@@ -860,6 +896,15 @@ def main():
             
         if 'move_mode' not in st.session_state:
             st.session_state.move_mode = False
+            
+        if 'node_positions' not in st.session_state:
+            # Initialize default positions for existing nodes
+            st.session_state.node_positions = {}
+            for i, node in enumerate(st.session_state.graph_nodes):
+                st.session_state.node_positions[node] = {
+                    'x': 50 + (i % 5) * 150,
+                    'y': 50 + (i // 5) * 120
+                }
         
         # Navigation
         col_back, col_mode = st.columns([1, 2])
@@ -978,7 +1023,8 @@ def main():
             graph_data = {
                 'nodes': st.session_state.graph_nodes,
                 'edges': st.session_state.graph_edges,
-                'move_mode': st.session_state.move_mode
+                'move_mode': st.session_state.move_mode,
+                'node_positions': st.session_state.node_positions
             }
             
             # Create the interactive editor
