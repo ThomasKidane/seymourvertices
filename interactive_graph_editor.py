@@ -84,12 +84,7 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
                 border: 2px solid #ccc;
                 border-radius: 8px;
                 cursor: grab;
-                background: linear-gradient(45deg, #f8f9fa 25%, transparent 25%), 
-                           linear-gradient(-45deg, #f8f9fa 25%, transparent 25%), 
-                           linear-gradient(45deg, transparent 75%, #f8f9fa 75%), 
-                           linear-gradient(-45deg, transparent 75%, #f8f9fa 75%);
-                background-size: 20px 20px;
-                background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+                background: white;
                 user-select: none;
                 -webkit-user-select: none;
                 -moz-user-select: none;
@@ -506,10 +501,25 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
                 const event = new CustomEvent('graphUpdate', {{
                     detail: {{
                         nodes: graphData.nodes.map(n => n.id),
-                        edges: graphData.edges.map(e => [e.from, e.to])
+                        edges: graphData.edges.map(e => [e.from, e.to]),
+                        node_positions: {{}}
                     }}
                 }});
+                
+                // Include current node positions
+                graphData.nodes.forEach(node => {{
+                    event.detail.node_positions[node.id] = {{ x: node.x, y: node.y }};
+                }});
+                
+                console.log('Sending data to Streamlit:', event.detail);
                 window.dispatchEvent(event);
+                
+                // Also save to localStorage as backup
+                localStorage.setItem('graphData', JSON.stringify({{
+                    nodes: graphData.nodes.map(n => n.id),
+                    edges: graphData.edges.map(e => [e.from, e.to]),
+                    node_positions: event.detail.node_positions
+                }}));
             }}
             
             function saveNodePositions() {{
@@ -776,6 +786,47 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
             console.log('Canvas:', canvas, 'Context:', ctx);
             console.log('Canvas dimensions:', canvas.width, 'x', canvas.height);
             
+            // Try to restore graph data from localStorage if available
+            function restoreFromLocalStorage() {{
+                const saved = localStorage.getItem('graphData');
+                if (saved) {{
+                    try {{
+                        const savedData = JSON.parse(saved);
+                        console.log('Found saved graph data:', savedData);
+                        
+                        // Only restore if we have more nodes saved than in current data
+                        if (savedData.nodes && savedData.nodes.length > graphData.nodes.length) {{
+                            console.log('Restoring saved graph data with more nodes');
+                            
+                            // Update nodes
+                            graphData.nodes = savedData.nodes.map(nodeId => {{
+                                const pos = savedData.node_positions && savedData.node_positions[nodeId] 
+                                    ? savedData.node_positions[nodeId] 
+                                    : {{ x: 50 + (nodeId % 5) * 150, y: 50 + Math.floor(nodeId / 5) * 120 }};
+                                return {{
+                                    id: nodeId,
+                                    x: pos.x,
+                                    y: pos.y,
+                                    is_seymour: false
+                                }};
+                            }});
+                            
+                            // Update edges
+                            graphData.edges = savedData.edges ? savedData.edges.map(edge => {{
+                                return {{ from: edge[0], to: edge[1] }};
+                            }}) : [];
+                            
+                            console.log('Restored graph data:', graphData);
+                        }}
+                    }} catch (e) {{
+                        console.error('Error restoring saved data:', e);
+                    }}
+                }}
+            }}
+            
+            // Restore from localStorage first
+            restoreFromLocalStorage();
+            
             // Load saved positions and render
             loadNodePositions();
             updateSeymourStatus();
@@ -793,13 +844,59 @@ def create_interactive_graph_editor(graph_data, width=800, height=600):
             
             // Listen for updates from Streamlit
             window.addEventListener('graphDataUpdate', (e) => {{
-                graphData = e.detail;
-                // Update move mode from the new data
-                if (graphData.move_mode !== undefined) {{
-                    moveMode = graphData.move_mode;
+                const newData = e.detail;
+                console.log('Received update from Streamlit:', newData);
+                console.log('Current graph data:', graphData);
+                
+                // Always update move mode
+                if (newData.move_mode !== undefined) {{
+                    moveMode = newData.move_mode;
+                    graphData.move_mode = newData.move_mode;
                     console.log('Move mode updated from Streamlit:', moveMode);
                     updateStatus(moveMode ? 'Move Mode: Drag nodes to reposition them' : 'Connect Mode: Drag between nodes to create edges');
                 }}
+                
+                // Only replace graph structure if the new data has more or equal nodes
+                // This preserves dynamically added nodes
+                if (!graphData.nodes || newData.nodes.length >= graphData.nodes.length) {{
+                    console.log('Updating graph structure from Streamlit');
+                    
+                    // Preserve any nodes that were added locally but aren't in the new data
+                    const existingNodeIds = new Set(graphData.nodes ? graphData.nodes.map(n => n.id) : []);
+                    const newNodeIds = new Set(newData.nodes);
+                    const nodesToPreserve = graphData.nodes ? graphData.nodes.filter(n => !newNodeIds.has(n.id)) : [];
+                    
+                    // Update with new data
+                    graphData.nodes = newData.nodes.map(nodeId => {{
+                        // Try to find existing node first to preserve position
+                        const existing = graphData.nodes ? graphData.nodes.find(n => n.id === nodeId) : null;
+                        if (existing) {{
+                            return existing;
+                        }}
+                        
+                        // Create new node with default position
+                        const pos = newData.node_positions && newData.node_positions[nodeId] 
+                            ? newData.node_positions[nodeId] 
+                            : {{ x: 50 + (nodeId % 5) * 150, y: 50 + Math.floor(nodeId / 5) * 120 }};
+                        return {{
+                            id: nodeId,
+                            x: pos.x,
+                            y: pos.y,
+                            is_seymour: false
+                        }};
+                    }});
+                    
+                    // Add any preserved nodes
+                    graphData.nodes = graphData.nodes.concat(nodesToPreserve);
+                    
+                    // Update edges
+                    graphData.edges = newData.edges.map(edge => ({{ from: edge[0], to: edge[1] }}));
+                    
+                    console.log('Updated graph data:', graphData);
+                }} else {{
+                    console.log('Preserving existing graph data - it has more nodes than Streamlit state');
+                }}
+                
                 updateSeymourStatus();
                 render();
             }});
@@ -889,7 +986,7 @@ def main():
             st.session_state.graph_nodes = [0, 1, 2, 3]
         
         if 'graph_edges' not in st.session_state:
-            st.session_state.graph_edges = [(0, 1), (1, 2), (2, 0), (1, 3)]
+            st.session_state.graph_edges = [(0, 1)]
         
         if 'moves_count' not in st.session_state:
             st.session_state.moves_count = 0
